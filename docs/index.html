@@ -264,7 +264,7 @@ async function speak(text){
     try { const url = await diegoClip(clean); diegoError = ''; await playUrl(url); return; }
     catch (e){
       diegoError = e.message === 'no relay' ? "Add your Diego voice relay link to use Diego. Mario used the phone's voice."
-        : "The Diego voice couldn't be reached (" + String(e.message || e).slice(0, 120) + "). Mario used the phone's voice.";
+        : "The Diego voice couldn't be reached (" + String(e.message || e).slice(0, 300) + "). Mario used the phone's voice.";
     }
   }
   await phoneSpeak(text);

@@ -189,33 +189,48 @@ async function synthesize(text, voice, rate, pitch) {
   ws.accept();
 
   const chunks = [];
+  const seen = [];          // what Microsoft sent back, for error messages
+  let closeInfo = '';
+  let pending = Promise.resolve();
   const done = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { try { ws.close(); } catch (e) {} reject(new Error('timeout')); }, 20000);
+    let finished = false;
+    const finish = () => { if (finished) return; finished = true; clearTimeout(timer); pending.then(resolve); };
+    const timer = setTimeout(() => { try { ws.close(); } catch (e) {} reject(new Error('timeout; got: ' + seen.join(', '))); }, 20000);
     ws.addEventListener('message', ev => {
-      if (typeof ev.data === 'string') {
-        if (ev.data.includes('Path:turn.end')) { clearTimeout(timer); try { ws.close(); } catch (e) {} resolve(); }
+      const data = ev.data;
+      if (typeof data === 'string') {
+        const path = (data.match(/Path:([^\r\n]+)/) || [])[1] || 'text';
+        seen.push(path);
+        if (path === 'turn.end') { try { ws.close(); } catch (e) {} finish(); }
         return;
       }
-      const buf = new Uint8Array(ev.data);
-      if (buf.length < 2) return;
-      const headLen = (buf[0] << 8) | buf[1];
-      const head = new TextDecoder().decode(buf.slice(2, 2 + headLen));
-      if (head.includes('Path:audio') && head.includes('audio/mpeg')) {
-        const audio = buf.slice(2 + headLen);
-        if (audio.length) chunks.push(audio);
-      }
+      // Binary audio can arrive as an ArrayBuffer, a typed array or a Blob.
+      pending = pending.then(async () => {
+        let buf;
+        if (data instanceof ArrayBuffer) buf = new Uint8Array(data);
+        else if (ArrayBuffer.isView(data)) buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        else if (data && typeof data.arrayBuffer === 'function') buf = new Uint8Array(await data.arrayBuffer());
+        else { seen.push('unknown:' + typeof data); return; }
+        if (buf.length < 2) return;
+        const headLen = (buf[0] << 8) | buf[1];
+        const head = new TextDecoder().decode(buf.subarray(2, 2 + headLen));
+        const path = (head.match(/Path:([^\r\n]+)/) || [])[1] || 'binary';
+        if (!seen.includes('bin:' + path)) seen.push('bin:' + path);
+        const audio = buf.subarray(2 + headLen);
+        if (path === 'audio' && audio.length) chunks.push(audio.slice());
+      });
     });
-    ws.addEventListener('close', () => { clearTimeout(timer); resolve(); });
-    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('connection error')); });
+    ws.addEventListener('close', ev => { closeInfo = `closed ${ev.code}${ev.reason ? ' ' + ev.reason : ''}`; finish(); });
+    ws.addEventListener('error', ev => { seen.push('error ' + (ev.message || '')); });
   });
 
   ws.send(`X-Timestamp:${stamp()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
-    '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n');
+    '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n');
   const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='${voice}'><prosody pitch='${pitch}' rate='${rate}' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`;
   ws.send(`X-RequestId:${randomHex(16).toLowerCase()}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${stamp()}Z\r\nPath:ssml\r\n\r\n${ssml}`);
 
   await done;
-  if (!chunks.length) throw new Error('no audio received');
+  if (!chunks.length) throw new Error(`no audio received (got: ${seen.join(', ') || 'nothing'}; ${closeInfo || 'still open'})`);
   const total = chunks.reduce((n, c) => n + c.length, 0);
   const out = new Uint8Array(total);
   let at = 0; for (const c of chunks) { out.set(c, at); at += c.length; }
