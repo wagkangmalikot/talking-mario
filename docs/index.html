@@ -105,14 +105,18 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <h2>Grown-ups only</h2>
     <p>Mario's brain runs on the Claude API. Paste your Anthropic API key once; it stays saved in this browser only.</p>
     <label>Claude API key<input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
-    <label>Mario's voice<select id="voiceSel"></select></label>
+    <label>ElevenLabs API key <span class="small" style="font-weight:600">(optional, for the real Mario-style voice)</span><input id="elKey" type="password" placeholder="sk_…" autocomplete="off" spellcheck="false"></label>
+    <label>ElevenLabs voice ID<input id="elVoice" type="text" placeholder="Paste the voice ID from the Voice Library" autocomplete="off" spellcheck="false"></label>
+    <p class="small">In ElevenLabs, open the Voice Library, find the voice you want, add it to My Voices, then tap ⋯ → Copy voice ID.</p>
+    <label>Backup phone voice<select id="voiceSel"></select></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
+    <p class="small" id="voiceNote" hidden></p>
     <label>Language your kid speaks<select id="lang">
       <option value="en-US">English (US)</option>
       <option value="en-PH">English (Philippines)</option>
       <option value="fil-PH">Filipino / Tagalog</option>
     </select></label>
-    <p class="small">Tip: an Italian voice (like Luca, Diego, Cosimo or Google italiano) reading English gives Mario his accent.</p>
+    <p class="small">The backup phone voice is used when ElevenLabs is not set up or can't be reached. An Italian voice reading English gives it an accent.</p>
     <p class="err" id="setupErr" hidden></p>
     <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
   </form>
@@ -153,6 +157,8 @@ const store = {
 let apiKey = store.get('mario-key') || '';
 let lang = store.get('mario-lang') || 'en-US';
 let voiceName = store.get('mario-voice') || '';
+let elKey = store.get('mario-el-key') || '';
+let elVoice = store.get('mario-el-voice') || '';
 const turns = [];
 let state = 'idle'; // idle | listening | thinking | speaking
 
@@ -188,7 +194,7 @@ function marioize(text){
     .replace(/mamma mia/gi,'Mamma mi-ah')
     .replace(/let'?s-a go/gi,"Let's-a goooo");
 }
-function speak(text){
+function browserSpeak(text){
   return new Promise(resolve => {
     if (!synth) return resolve();
     synth.cancel();
@@ -208,6 +214,68 @@ function speak(text){
 }
 // Chrome pauses long speech after ~15s; nudge it.
 if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setInterval(() => { if (synth && synth.speaking && !synth.paused){ synth.pause(); synth.resume(); } }, 10000);
+
+/* ---------- ElevenLabs voice ---------- */
+const player = new Audio();
+player.preload = 'auto';
+const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let audioUnlocked = false;
+function unlockAudio(){
+  // Phones only allow sound that starts from a tap; play silence on the tap so later clips can play.
+  if (audioUnlocked) return;
+  try { player.src = SILENT; const p = player.play(); if (p) p.then(() => { audioUnlocked = true; }).catch(() => {}); } catch(e){}
+}
+const clipCache = new Map();
+let lastVoiceError = '';
+function elReady(){ return !!(elKey && elVoice); }
+function cleanVoiceId(v){ const m = String(v).match(/[A-Za-z0-9]{20}/); return m ? m[0] : String(v).trim(); }
+async function elClip(text){
+  const ck = elVoice + '|' + text;
+  if (clipCache.has(ck)) return clipCache.get(ck);
+  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elVoice)}?output_format=mp3_44100_128`, {
+    method: 'POST',
+    headers: { 'xi-api-key': elKey, 'content-type': 'application/json', 'accept': 'audio/mpeg' },
+    body: JSON.stringify({ text, model_id: 'eleven_flash_v2_5' })
+  });
+  if (!res.ok){
+    let detail = '';
+    try { const j = await res.json(); detail = (j.detail && (j.detail.message || j.detail.status)) || ''; } catch(e){}
+    const err = new Error(detail || ('ElevenLabs error ' + res.status)); err.status = res.status; throw err;
+  }
+  const url = URL.createObjectURL(await res.blob());
+  if (text.length < 80) clipCache.set(ck, url);   // keep short repeat lines like "Hmm, let-a me think!"
+  return url;
+}
+function playUrl(url){
+  return new Promise(resolve => {
+    player.onended = player.onerror = player.onpause = () => resolve();
+    player.src = url;
+    const p = player.play();
+    if (p) p.catch(() => resolve());
+  });
+}
+async function speak(text){
+  const clean = text.replace(/[*_#~`]/g, '');
+  if (elReady()){
+    try {
+      const url = await elClip(clean);
+      lastVoiceError = '';
+      await playUrl(url);
+      return;
+    } catch (e){
+      lastVoiceError = e.status === 401 ? 'The ElevenLabs key was not accepted.'
+        : (e.status === 404 || e.status === 400) ? 'That ElevenLabs voice ID was not found. Add the voice to My Voices, then copy its ID again.'
+        : e.status === 429 ? 'ElevenLabs is out of credits or busy right now.'
+        : (e.message || 'ElevenLabs could not be reached.');
+    }
+  }
+  await browserSpeak(text);   // backup voice
+}
+function stopSpeaking(){
+  try { player.pause(); } catch(e){}
+  if (synth) synth.cancel();
+}
+function prefetchFillers(){ if (elReady()) THINKING.forEach(t => elClip(t).catch(() => {})); }
 
 /* ---------- Listening ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -269,13 +337,14 @@ function marioSays(text, waiting){
 }
 
 talkBtn.addEventListener('click', async () => {
+  unlockAudio();
   if (!SR){ marioSays("Mamma mia! This browser can't hear you. Please open me in Google Chrome or Microsoft Edge."); return; }
   if (!apiKey){ openPanel(); return; }
   if (state === 'listening'){ rec && rec.stop(); return; }
-  if (state === 'speaking'){ synth && synth.cancel(); setState('idle','Tap and talk!'); return; }
+  if (state === 'speaking'){ stopSpeaking(); setState('idle','Tap and talk!'); return; }
   if (state === 'thinking') return;
 
-  synth && synth.cancel();
+  stopSpeaking();
   kidEl.textContent = '';
   setState('listening','I\'m listening…');
   let heard = '';
@@ -316,24 +385,43 @@ talkBtn.addEventListener('click', async () => {
 /* ---------- Grown-ups panel ---------- */
 function openPanel(errMsg){
   $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName;
+  $('elKey').value = elKey; $('elVoice').value = elVoice;
+  $('voiceNote').hidden = !lastVoiceError; $('voiceNote').textContent = lastVoiceError;
   $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
   $('panel').hidden = false;
 }
 $('gear').onclick = () => openPanel();
 $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('voiceSel').onchange = e => { voiceName = e.target.value; };
-$('testVoice').onclick = () => { voiceName = $('voiceSel').value; speak("It's-a me, Mario! Wahoo! Let's-a go!"); };
+$('testVoice').onclick = async () => {
+  unlockAudio();
+  voiceName = $('voiceSel').value;
+  elKey = $('elKey').value.trim(); elVoice = cleanVoiceId($('elVoice').value); $('elVoice').value = elVoice;
+  const note = $('voiceNote');
+  note.hidden = false; note.className = 'small';
+  note.textContent = elReady() ? 'Getting Mario\'s voice from ElevenLabs…' : 'Playing the backup phone voice. Add ElevenLabs details for the Mario-style voice.';
+  await speak("It's-a me, Mario! Wahoo! Let's-a go!");
+  if (elReady()){
+    if (lastVoiceError){ note.className = 'small err'; note.textContent = lastVoiceError + ' You heard the backup phone voice instead.'; }
+    else note.textContent = 'ElevenLabs voice is working.';
+  }
+};
 $('setup').addEventListener('submit', e => {
   e.preventDefault();
   const k = $('key').value.trim();
   if (!k){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste an API key to let Mario answer.'; return; }
+  unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
+  elKey = $('elKey').value.trim(); elVoice = cleanVoiceId($('elVoice').value);
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
+  store.set('mario-el-key', elKey); store.set('mario-el-voice', elVoice);
+  prefetchFillers();
   $('panel').hidden = true;
   speak("Okey-dokey! It's-a me, Mario! Tap the big button and ask me anything!");
 });
 
 if (!apiKey) openPanel();
+prefetchFillers();
 if (!SR) statusEl.textContent = 'Open in Chrome or Edge to talk';
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
