@@ -112,7 +112,7 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
       <option value="en-PH">English (Philippines)</option>
       <option value="fil-PH">Filipino / Tagalog</option>
     </select></label>
-    <p class="small">Tip: an Italian voice (like Luca, Diego, Cosimo or Google italiano) reading English gives Mario his accent.</p>
+    <p class="small">Best Mario voice: open this app in <b>Microsoft Edge</b> and pick <b>Microsoft Diego Online (Natural)</b>. In Chrome, pick an Italian male voice.</p>
     <p class="err" id="setupErr" hidden></p>
     <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
   </form>
@@ -163,7 +163,8 @@ function rankVoice(v){
   const n = v.name.toLowerCase(), l = v.lang.toLowerCase();
   let s = 0;
   if (l.startsWith('it')) s += 100;                       // Italian accent
-  if (/luca|diego|cosimo|giorgio|male|uomo/.test(n)) s += 40; // male Italian voices
+  if (/diego/.test(n)) s += 80;                            // Microsoft Diego (it-IT-DiegoNeural)
+  if (/luca|cosimo|giorgio|male|uomo|-x-itc-|-x-itd-/.test(n)) s += 40; // other male Italian voices
   if (/google|natural|neural|online/.test(n)) s += 10;     // smoother engines
   if (l.startsWith('en')) s += 20;
   if (/female|alice|elsa|federica|paola|isabella/.test(n)) s -= 15;
@@ -199,7 +200,7 @@ function speak(text){
       const u = new SpeechSynthesisUtterance(p.trim());
       if (v){ u.voice = v; u.lang = v.lang; }
       u.pitch = 1.6;  // high and bright
-      u.rate = 1.12;  // quick and excited
+      u.rate = 1.2;   // +20%, as in the edge-tts settings
       u.volume = 1;
       u.onend = u.onerror = () => { if (--left === 0) resolve(); };
       synth.speak(u);
