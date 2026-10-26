@@ -107,13 +107,14 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <label>Claude API key<input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
+    <label>Diego voice relay link<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <p class="small" id="voiceNote" hidden></p>
     <label>Language your kid speaks<select id="lang">
       <option value="en-US">English (US)</option>
       <option value="en-PH">English (Philippines)</option>
       <option value="fil-PH">Filipino / Tagalog</option>
     </select></label>
-    <p class="small">"Mario (Diego, online)" is Microsoft's Italian Diego voice, sped up and pitched up. It needs internet. If it can't be reached, Mario uses the phone's own voice.</p>
+    <p class="small">"Mario (Diego, online)" is Microsoft's Italian Diego voice, sped up and pitched up. It plays through your voice relay link. Without it, or if it can't be reached, Mario uses the phone's own voice.</p>
     <p class="err" id="setupErr" hidden></p>
     <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
   </form>
@@ -155,6 +156,7 @@ let apiKey = store.get('mario-key') || '';
 let lang = store.get('mario-lang') || 'en-US';
 const DIEGO = '__diego__';
 let voiceName = store.get('mario-voice') || DIEGO;
+let relayUrl = store.get('mario-relay') || '';
 const turns = [];
 let state = 'idle'; // idle | listening | thinking | speaking
 
@@ -227,20 +229,20 @@ function unlockAudio(){
   // Phones only allow sound that starts from a tap; play silence on the tap so Mario's clips can play later.
   try { player.src = SILENT; const p = player.play(); if (p) p.catch(() => {}); } catch(e){}
 }
-let ttsLib = null;
-function loadTts(){
-  if (!ttsLib) ttsLib = import('https://cdn.jsdelivr.net/npm/edge-tts-universal@1.4.0/dist/browser.js').catch(e => { ttsLib = null; throw e; });
-  return ttsLib;
-}
 const clipCache = new Map();
 let diegoError = '';
 async function diegoClip(text){
   if (clipCache.has(text)) return clipCache.get(text);
-  const { EdgeTTS } = await loadTts();
-  const job = new EdgeTTS(text, 'it-IT-DiegoNeural', { rate: '+20%', pitch: '+50Hz' }).synthesize();
-  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000));
-  const { audio } = await Promise.race([job, timeout]);
-  if (!audio || !audio.size) throw new Error('no audio');
+  if (!relayUrl) throw new Error('no relay');
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 15000);
+  let res;
+  try {
+    res = await fetch(relayUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: ctl.signal,
+      body: JSON.stringify({ text, voice: 'it-IT-DiegoNeural', rate: '+20%', pitch: '+50Hz' }) });
+  } finally { clearTimeout(timer); }
+  if (!res.ok){ let m = ''; try { m = await res.text(); } catch(e){} throw new Error(m || ('relay error ' + res.status)); }
+  const audio = await res.blob();
+  if (!audio.size) throw new Error('no audio');
   const url = URL.createObjectURL(audio);
   if (text.length < 80) clipCache.set(text, url);
   return url;
@@ -260,7 +262,10 @@ async function speak(text){
   const clean = text.replace(/[*_#~`]/g, '');
   if (voiceName === DIEGO){
     try { const url = await diegoClip(clean); diegoError = ''; await playUrl(url); return; }
-    catch (e){ diegoError = "The Diego voice couldn't be reached, so Mario used the phone's voice."; }
+    catch (e){
+      diegoError = e.message === 'no relay' ? "Add your Diego voice relay link to use Diego. Mario used the phone's voice."
+        : "The Diego voice couldn't be reached (" + String(e.message || e).slice(0, 120) + "). Mario used the phone's voice.";
+    }
   }
   await phoneSpeak(text);
 }
@@ -374,7 +379,7 @@ talkBtn.addEventListener('click', async () => {
 
 /* ---------- Grown-ups panel ---------- */
 function openPanel(errMsg){
-  $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName;
+  $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName; $('relay').value = relayUrl;
   $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
   $('panel').hidden = false;
 }
@@ -384,6 +389,7 @@ $('voiceSel').onchange = e => { voiceName = e.target.value; };
 $('testVoice').onclick = async () => {
   unlockAudio();
   voiceName = $('voiceSel').value;
+  relayUrl = $('relay').value.trim();
   const note = $('voiceNote'); note.hidden = false; note.className = 'small';
   note.textContent = voiceName === DIEGO ? 'Getting Mario\'s Diego voice…' : 'Playing the phone voice.';
   await speak("It's-a me, Mario! Wahoo! Let's-a go!");
@@ -398,6 +404,7 @@ $('setup').addEventListener('submit', e => {
   if (!k){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste an API key to let Mario answer.'; return; }
   unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
+  relayUrl = $('relay').value.trim(); store.set('mario-relay', relayUrl);
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
   $('panel').hidden = true;
   prefetchFillers();
