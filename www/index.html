@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Talk to Mario</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
+<style>
+/* Layout: one screen — sky world, Mario's speech bubble up top, one giant talk button at the bottom. Single bright theme by choice. */
+:root{
+  --sky:#5fb8f5; --sky-deep:#3a95dc; --cloud:#fff; --hill:#4cbf5a; --hill-dark:#2f9a42;
+  --red:#e2312b; --red-dark:#a91d18; --gold:#ffc928; --ink:#1d2a3a; --ink-soft:#56667a; --listen:#2fbf71; --listen-dark:#1e8a50;
+  --display:"Lilita One","Arial Rounded MT Bold","Trebuchet MS",sans-serif;
+  --body:"Nunito","Segoe UI",system-ui,sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--sky);color:var(--ink);font-family:var(--body);overflow:hidden;-webkit-tap-highlight-color:transparent;user-select:none}
+.world{position:fixed;inset:0;pointer-events:none;overflow:hidden;background:linear-gradient(var(--sky),#9ad6fb 75%)}
+.cloud{position:absolute;background:var(--cloud);border-radius:999px;animation:drift 70s linear infinite}
+.cloud::before,.cloud::after{content:"";position:absolute;background:var(--cloud);border-radius:50%}
+.cloud::before{width:55%;height:150%;left:15%;top:-70%}.cloud::after{width:40%;height:120%;left:50%;top:-45%}
+.c1{width:120px;height:34px;top:12%}.c2{width:90px;height:26px;top:30%;animation-duration:90s;animation-delay:-40s}.c3{width:150px;height:40px;top:48%;animation-duration:110s;animation-delay:-75s}
+@keyframes drift{from{transform:translateX(-30vw)}to{transform:translateX(130vw)}}
+.hill{position:absolute;bottom:-70px;border-radius:50% 50% 0 0;background:var(--hill)}
+.h1{width:380px;height:230px;left:-80px}.h2{width:300px;height:180px;right:-60px;background:var(--hill-dark)}
+@media (prefers-reduced-motion:reduce){.cloud{animation:none}.btn-talk.listening::after{animation:none}}
+
+.app{position:relative;height:100%;max-width:640px;margin:0 auto;display:flex;flex-direction:column;
+  padding:max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(18px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+header{display:flex;align-items:center;gap:10px}
+h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);margin:0;color:var(--cloud);text-shadow:0 3px 0 var(--sky-deep)}
+.gear{margin-left:auto;border:0;background:rgba(255,255,255,.55);border-radius:999px;width:40px;height:40px;font-size:18px;cursor:pointer}
+
+.stage{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;gap:14px;padding-block:10px}
+.kid{align-self:flex-end;max-width:85%;background:#fff6d6;border-radius:20px 20px 6px 20px;padding:10px 16px;font-weight:800;font-size:18px;box-shadow:0 3px 0 rgba(0,0,0,.12)}
+.kid:empty{display:none}
+.bubble{align-self:stretch;background:var(--cloud);border-radius:26px 26px 26px 8px;padding:18px 20px;font-weight:700;font-size:clamp(19px,4.8vw,24px);line-height:1.4;
+  box-shadow:0 5px 0 rgba(0,0,0,.12);max-height:48vh;overflow-y:auto}
+.bubble .who{display:block;font-family:var(--display);font-weight:400;color:var(--red);font-size:18px;letter-spacing:.5px;margin-bottom:4px}
+.bubble.wait p{color:var(--ink-soft)}
+.bubble p{margin:0}
+
+.dock{display:flex;flex-direction:column;align-items:center;gap:10px}
+.status{font-family:var(--display);font-size:22px;color:var(--cloud);text-shadow:0 2px 0 var(--hill-dark);min-height:28px;text-align:center}
+.btn-talk{position:relative;width:min(46vw,190px);aspect-ratio:1;border-radius:50%;border:8px solid var(--cloud);cursor:pointer;
+  background:var(--red);box-shadow:0 8px 0 var(--red-dark);color:var(--cloud);font-family:var(--display);font-size:clamp(24px,6vw,32px);
+  display:grid;place-items:center;transition:transform .1s, background .2s}
+.btn-talk:active{transform:translateY(5px);box-shadow:0 3px 0 var(--red-dark)}
+.btn-talk svg{width:42%;height:42%}
+.btn-talk.listening{background:var(--listen);box-shadow:0 8px 0 var(--listen-dark)}
+.btn-talk.listening::after{content:"";position:absolute;inset:-18px;border-radius:50%;border:6px solid var(--cloud);opacity:.7;animation:ring 1.1s ease-out infinite}
+@keyframes ring{from{transform:scale(.85);opacity:.8}to{transform:scale(1.15);opacity:0}}
+.btn-talk.busy{background:var(--gold);box-shadow:0 8px 0 #c99a00;color:var(--ink)}
+.btn-talk:focus-visible,.gear:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:4px solid var(--gold);outline-offset:3px}
+
+/* Grown-ups panel */
+.panel{position:fixed;inset:0;background:rgba(15,30,50,.55);display:grid;place-items:center;padding:16px;user-select:text}
+.card{background:#fff;border-radius:20px;padding:22px;width:min(100%,460px);max-height:92vh;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.card h2{font-family:var(--display);font-weight:400;font-size:26px;margin:0;color:var(--red)}
+.card p{margin:0;color:var(--ink-soft);line-height:1.5;font-size:15px}
+.card label{font-weight:800;font-size:14px;display:flex;flex-direction:column;gap:6px}
+.card input,.card select{font:600 16px var(--body);padding:10px 12px;border:2px solid #cfd8e3;border-radius:12px;width:100%}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:800 16px var(--body);border:0;border-radius:12px;padding:12px 18px;cursor:pointer;background:var(--red);color:#fff}
+.btn.ghost{background:#e8eef5;color:var(--ink)}
+.small{font-size:13px!important}
+.err{color:var(--red-dark)!important;font-weight:800}
+</style>
+</head>
+<body>
+<div class="world" aria-hidden="true"><div class="cloud c1"></div><div class="cloud c2"></div><div class="cloud c3"></div><div class="hill h1"></div><div class="hill h2"></div></div>
+
+<div class="app">
+  <header>
+    <h1>Talk to Mario</h1>
+    <button class="gear" id="gear" type="button" aria-label="Grown-up settings">⚙️</button>
+  </header>
+
+  <div class="stage">
+    <div class="kid" id="kid" aria-live="polite"></div>
+    <div class="bubble" id="bubble" aria-live="polite"><span class="who">Mario</span><p id="say">It's-a me, Mario! Tap the big red button and ask me anything about the Mushroom Kingdom!</p></div>
+  </div>
+
+  <div class="dock">
+    <div class="status" id="status">Tap and talk!</div>
+    <button class="btn-talk" id="talk" type="button" aria-label="Tap to talk to Mario">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 0 0-7 0v6A3.5 3.5 0 0 0 12 15Z"/><path d="M18.5 11.5a.9.9 0 1 0-1.8 0 4.7 4.7 0 0 1-9.4 0 .9.9 0 1 0-1.8 0 6.5 6.5 0 0 0 5.6 6.4V20H8.6a.9.9 0 1 0 0 1.8h6.8a.9.9 0 1 0 0-1.8h-2.5v-2.1a6.5 6.5 0 0 0 5.6-6.4Z"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="panel" id="panel" hidden>
+  <form class="card" id="setup">
+    <h2>Grown-ups only</h2>
+    <p>Mario's brain runs on the Claude API. Paste your Anthropic API key once; it stays saved in this browser only.</p>
+    <label>Claude API key<input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+    <label>Mario's voice<select id="voiceSel"></select></label>
+    <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
+    <label>Language your kid speaks<select id="lang">
+      <option value="en-US">English (US)</option>
+      <option value="en-PH">English (Philippines)</option>
+      <option value="fil-PH">Filipino / Tagalog</option>
+    </select></label>
+    <p class="small">Tip: an Italian voice reading English gives Mario his accent. No Italian voices? Tap "Get more voices" and download Italian in Google Text-to-speech.</p>
+    <div class="row"><button class="btn ghost" type="button" id="moreVoices">Get more voices</button></div>
+    <p class="err" id="setupErr" hidden></p>
+    <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
+  </form>
+</div>
+
+<script>
+const MODEL = 'claude-haiku-5-5';
+const RULES = `You are Mario, the cheerful plumber hero who lives in the Mushroom Kingdom. You are talking OUT LOUD with a young child (about 4 to 10). Everything you write is spoken by a text-to-speech voice.
+
+How to talk:
+- Always stay in character as Mario: warm, brave, silly and kind.
+- Use Mario's playful Italian-flavored speech: "Wahoo!", "Mamma mia!", "Let's-a go!", "Okey-dokey!", "Here we go!", and add "-a" to some words ("it's-a", "let-a me tell you"). Keep it fun, not every sentence.
+- Keep answers SHORT: 2 to 4 simple sentences. Easy words.
+- Plain spoken text only: no lists, markdown, emojis, asterisks or stage directions.
+- Often end with a fun little question to keep the child talking.
+- Reply in the same language the child used.
+- The child's words come from speech recognition and may have mistakes; guess what they meant kindly.
+
+What to talk about:
+- The world of Super Mario as a REAL place you live in: the Mushroom Kingdom and nearby lands, Princess Peach, Luigi, Toad, Yoshi, Bowser, Bowser Jr., the Koopalings, Goombas, Koopa Troopas, Boos, Piranha Plants, Lakitu, power-ups (Super Mushroom, Fire Flower, Super Star, 1-Up), coins, warp pipes, castles, karts, parties and adventures.
+- Never talk about it as video games: no consoles, controllers, buttons, game titles, levels, players or Nintendo.
+- Bowser and other baddies are troublemakers, but keep it gentle, never scary or violent. Adventures are about teamwork, bravery and kindness.
+- If asked about things outside your world (homework, news, grown-up topics), say kindly you only know about the Mushroom Kingdom and steer back with a fun question. Simple friendly chat like favorite colors is fine.
+
+Safety:
+- Never ask for the child's name, age, address, school or other personal details, and don't repeat them if shared.
+- If the child sounds hurt, scared, sad or unsafe, gently step out of the adventure talk: say that's important and they should tell a grown-up they trust, like a mom, dad or teacher, right away.
+- Nothing romantic, scary, rude or unsafe. Never suggest dangerous real-life tricks (jumping off things, eating wild mushrooms); remind them those only work in the Mushroom Kingdom.`;
+
+const THINKING = ["Hmm, let-a me think!", "Ooh, good question!", "Mamma mia, let me see!", "Okey-dokey, one second!"];
+
+const $ = id => document.getElementById(id);
+const talkBtn = $('talk'), statusEl = $('status'), sayEl = $('say'), kidEl = $('kid'), bubble = $('bubble');
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+};
+let apiKey = store.get('mario-key') || '';
+let lang = store.get('mario-lang') || 'en-US';
+let voiceName = store.get('mario-voice') || '';
+const turns = [];
+let state = 'idle';
+
+const P = (window.Capacitor && window.Capacitor.Plugins) || {};
+const TTS = P.TextToSpeech, SR = P.SpeechRecognition;
+
+/* ---------- Mario's voice (Android text-to-speech) ---------- */
+let voices = [];   // index in this array = voice id the plugin expects
+function rankVoice(v){
+  const n = (v.name||'').toLowerCase(), l = (v.lang||'').toLowerCase();
+  let s = 0;
+  if (l.startsWith('it')) s += 100;
+  if (/male|#male|-x-\w*d-|-x-\w*c-|luca|diego|cosimo|giorgio/.test(n)) s += 30;
+  if (v.localService) s += 10;
+  if (l.startsWith('en')) s += 20;
+  if (/female/.test(n)) s -= 15;
+  return s;
+}
+async function loadVoices(){
+  if (!TTS) return;
+  try { voices = (await TTS.getSupportedVoices()).voices || []; } catch(e){ voices = []; }
+  const sel = $('voiceSel'); sel.innerHTML = '';
+  const order = voices.map((v,i) => ({v,i})).sort((a,b) => rankVoice(b.v) - rankVoice(a.v));
+  order.forEach(({v}) => { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.append(o); });
+  if ((!voiceName || !voices.some(v => v.name === voiceName)) && order[0]) voiceName = order[0].v.name;
+  sel.value = voiceName;
+}
+function voiceIndex(){ return voices.findIndex(v => v.name === voiceName); }
+function marioize(text){
+  return text.replace(/[*_#~`]/g,'')
+    .replace(/\bwahoo\b/gi,'Wa-hooo')
+    .replace(/\byahoo\b/gi,'Ya-hooo')
+    .replace(/mamma mia/gi,'Mamma mi-ah')
+    .replace(/let'?s-a go/gi,"Let's-a goooo");
+}
+async function speak(text){
+  if (!TTS) return;
+  const i = voiceIndex();
+  const opts = { text: marioize(text), pitch: 1.6, rate: 1.1, volume: 1.0, queueStrategy: 0 };
+  if (i >= 0){ opts.voice = i; opts.lang = voices[i].lang; } else { opts.lang = 'it-IT'; }
+  try { await TTS.speak(opts); } catch(e){}
+}
+async function stopSpeaking(){ try { TTS && await TTS.stop(); } catch(e){} }
+
+/* ---------- Listening (Android speech recognition) ---------- */
+async function micReady(){
+  if (!SR) return false;
+  try {
+    const { available } = await SR.available();
+    if (!available) return false;
+    let p = await SR.checkPermissions();
+    if (p.speechRecognition !== 'granted') p = await SR.requestPermissions();
+    return p.speechRecognition === 'granted';
+  } catch(e){ return false; }
+}
+async function listen(){
+  const r = await SR.start({ language: lang, maxResults: 1, popup: false, partialResults: false });
+  return ((r && r.matches && r.matches[0]) || '').trim();
+}
+
+/* ---------- Mario's brain (Claude API) ---------- */
+async function askMario(text){
+  turns.push({ role:'user', content:text });
+  while (turns.length > 14) turns.shift();
+  while (turns[0] && turns[0].role !== 'user') turns.shift();
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:MODEL, max_tokens:300, system:RULES, messages:turns })
+  });
+  if (!res.ok){ turns.pop(); const err = new Error('api'); err.status = res.status; throw err; }
+  const data = await res.json();
+  const answer = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+  turns.push({ role:'assistant', content:answer });
+  return answer;
+}
+
+/* ---------- Flow ---------- */
+function setState(s, msg){
+  state = s;
+  talkBtn.classList.toggle('listening', s === 'listening');
+  talkBtn.classList.toggle('busy', s === 'thinking' || s === 'speaking');
+  statusEl.textContent = msg;
+}
+function marioSays(text, waiting){ sayEl.textContent = text; bubble.classList.toggle('wait', !!waiting); bubble.scrollTop = 0; }
+async function marioSaysAloud(text){ marioSays(text); await speak(text); }
+
+talkBtn.addEventListener('click', async () => {
+  if (!apiKey){ openPanel(); return; }
+  if (state === 'listening'){ try { await SR.stop(); } catch(e){} return; }
+  if (state === 'speaking'){ await stopSpeaking(); setState('idle','Tap and talk!'); return; }
+  if (state === 'thinking') return;
+
+  if (!(await micReady())){
+    marioSays("Mamma mia! I can't hear you. A grown-up needs to allow the microphone for this app in the phone's Settings.");
+    return;
+  }
+  await stopSpeaking();
+  kidEl.textContent = '';
+  setState('listening',"I'm listening…");
+  let heard = '';
+  try { heard = await listen(); } catch(e){ heard = ''; }
+  if (!heard){ setState('idle','Tap and talk!'); marioSaysAloud("Hmm? I didn't hear you! Tap the button and talk to me!"); return; }
+  kidEl.textContent = heard;
+
+  setState('thinking','Mario is thinking…');
+  const filler = THINKING[Math.floor(Math.random()*THINKING.length)];
+  marioSays(filler, true);
+  const fillerDone = speak(filler);
+  try {
+    const answer = await askMario(heard);
+    await fillerDone;
+    marioSays(answer);
+    setState('speaking','Mario is talking!');
+    await speak(answer);
+    if (state === 'speaking') setState('idle','Tap and talk!');
+  } catch (e){
+    setState('idle','Tap and talk!');
+    if (e.status === 401 || e.status === 403){ marioSays("Mamma mia! My brain key isn't working. A grown-up needs to check the settings."); openPanel('That API key was not accepted. Check it and save again.'); }
+    else if (e.status === 429){ marioSaysAloud("Whoa, slow down! Let me catch my breath, then ask again!"); }
+    else { marioSaysAloud("Oops, a warp pipe got clogged! Is the internet on? Ask me again!"); }
+  }
+});
+
+/* ---------- Grown-ups panel ---------- */
+function openPanel(errMsg){
+  $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName;
+  $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
+  $('panel').hidden = false;
+}
+$('gear').onclick = () => openPanel();
+$('closePanel').onclick = () => { $('panel').hidden = true; };
+$('voiceSel').onchange = e => { voiceName = e.target.value; };
+$('testVoice').onclick = () => { voiceName = $('voiceSel').value; speak("It's-a me, Mario! Wahoo! Let's-a go!"); };
+$('moreVoices').onclick = async () => { try { await TTS.openInstall(); } catch(e){} };
+$('setup').addEventListener('submit', e => {
+  e.preventDefault();
+  const k = $('key').value.trim();
+  if (!k){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste an API key to let Mario answer.'; return; }
+  apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
+  store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
+  $('panel').hidden = true;
+  speak("Okey-dokey! It's-a me, Mario! Tap the big button and ask me anything!");
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) loadVoices(); else loadVoices(); });
+
+loadVoices();
+if (!apiKey) openPanel();
+if (!SR || !TTS) statusEl.textContent = 'Install the app on Android to talk';
+</script>
+</body>
+</html>

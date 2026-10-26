@@ -1,0 +1,8 @@
+{
+  "appId": "com.talktomario.app",
+  "appName": "Talk to Mario",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}
