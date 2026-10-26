@@ -107,12 +107,13 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <label>Claude API key<input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
+    <p class="small" id="voiceNote" hidden></p>
     <label>Language your kid speaks<select id="lang">
       <option value="en-US">English (US)</option>
       <option value="en-PH">English (Philippines)</option>
       <option value="fil-PH">Filipino / Tagalog</option>
     </select></label>
-    <p class="small">Best Mario voice: open this app in <b>Microsoft Edge</b> and pick <b>Microsoft Diego Online (Natural)</b>. In Chrome, pick an Italian male voice.</p>
+    <p class="small">"Mario (Diego, online)" is Microsoft's Italian Diego voice, sped up and pitched up. It needs internet. If it can't be reached, Mario uses the phone's own voice.</p>
     <p class="err" id="setupErr" hidden></p>
     <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
   </form>
@@ -152,7 +153,8 @@ const store = {
 };
 let apiKey = store.get('mario-key') || '';
 let lang = store.get('mario-lang') || 'en-US';
-let voiceName = store.get('mario-voice') || '';
+const DIEGO = '__diego__';
+let voiceName = store.get('mario-voice') || DIEGO;
 const turns = [];
 let state = 'idle'; // idle | listening | thinking | speaking
 
@@ -173,12 +175,20 @@ function rankVoice(v){
 function loadVoices(){
   voices = synth ? synth.getVoices() : [];
   const sel = $('voiceSel'); sel.innerHTML = '';
+  const add = (value, label) => { const o = document.createElement('option'); o.value = value; o.textContent = label; sel.append(o); };
+  add(DIEGO, 'Mario (Diego, online) – best');
   const sorted = [...voices].sort((a,b) => rankVoice(b) - rankVoice(a));
-  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.append(o); });
-  if (!voiceName && sorted[0]) voiceName = sorted[0].name;
+  if (!sorted.length) add('', 'Phone default voice');
+  sorted.forEach(v => add(v.name, `${v.name} (${v.lang})`));
+  if (![...sel.options].some(o => o.value === voiceName)) voiceName = DIEGO;
   sel.value = voiceName;
 }
-if (synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
+loadVoices();
+if (synth){
+  synth.onvoiceschanged = loadVoices;
+  // Some phones fill the list a few seconds late.
+  let tries = 0; const t = setInterval(() => { if (synth.getVoices().length !== voices.length) loadVoices(); if (++tries > 10) clearInterval(t); }, 500);
+}
 function currentVoice(){ return voices.find(v => v.name === voiceName) || null; }
 
 function marioize(text){
@@ -189,12 +199,12 @@ function marioize(text){
     .replace(/mamma mia/gi,'Mamma mi-ah')
     .replace(/let'?s-a go/gi,"Let's-a goooo");
 }
-function speak(text){
+function phoneSpeak(text){
   return new Promise(resolve => {
     if (!synth) return resolve();
     synth.cancel();
     const parts = marioize(text).match(/[^.!?]+[.!?]*/g) || [text];
-    const v = currentVoice();
+    const v = voiceName === DIEGO ? (voices.slice().sort((a,b) => rankVoice(b) - rankVoice(a))[0] || null) : currentVoice();
     let left = parts.length;
     parts.forEach(p => {
       const u = new SpeechSynthesisUtterance(p.trim());
@@ -209,6 +219,53 @@ function speak(text){
 }
 // Chrome pauses long speech after ~15s; nudge it.
 if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setInterval(() => { if (synth && synth.speaking && !synth.paused){ synth.pause(); synth.resume(); } }, 10000);
+
+/* ---------- Diego online voice (same service as edge-tts) ---------- */
+const player = new Audio();
+const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+function unlockAudio(){
+  // Phones only allow sound that starts from a tap; play silence on the tap so Mario's clips can play later.
+  try { player.src = SILENT; const p = player.play(); if (p) p.catch(() => {}); } catch(e){}
+}
+let ttsLib = null;
+function loadTts(){
+  if (!ttsLib) ttsLib = import('https://cdn.jsdelivr.net/npm/edge-tts-universal@1.4.0/dist/browser.js').catch(e => { ttsLib = null; throw e; });
+  return ttsLib;
+}
+const clipCache = new Map();
+let diegoError = '';
+async function diegoClip(text){
+  if (clipCache.has(text)) return clipCache.get(text);
+  const { EdgeTTS } = await loadTts();
+  const job = new EdgeTTS(text, 'it-IT-DiegoNeural', { rate: '+20%', pitch: '+50Hz' }).synthesize();
+  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000));
+  const { audio } = await Promise.race([job, timeout]);
+  if (!audio || !audio.size) throw new Error('no audio');
+  const url = URL.createObjectURL(audio);
+  if (text.length < 80) clipCache.set(text, url);
+  return url;
+}
+let endClip = null;
+function playUrl(url){
+  return new Promise(resolve => {
+    const done = () => { if (endClip === done) endClip = null; resolve(); };
+    endClip = done;
+    player.src = url;
+    player.onended = player.onerror = done;
+    const p = player.play();
+    if (p) p.catch(done);
+  });
+}
+async function speak(text){
+  const clean = text.replace(/[*_#~`]/g, '');
+  if (voiceName === DIEGO){
+    try { const url = await diegoClip(clean); diegoError = ''; await playUrl(url); return; }
+    catch (e){ diegoError = "The Diego voice couldn't be reached, so Mario used the phone's voice."; }
+  }
+  await phoneSpeak(text);
+}
+function stopSpeaking(){ try { player.pause(); } catch(e){} if (endClip) endClip(); if (synth) synth.cancel(); }
+function prefetchFillers(){ if (voiceName === DIEGO) THINKING.forEach(t => diegoClip(t).catch(() => {})); }
 
 /* ---------- Listening ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -270,13 +327,14 @@ function marioSays(text, waiting){
 }
 
 talkBtn.addEventListener('click', async () => {
+  unlockAudio();
   if (!SR){ marioSays("Mamma mia! This browser can't hear you. Please open me in Google Chrome or Microsoft Edge."); return; }
   if (!apiKey){ openPanel(); return; }
   if (state === 'listening'){ rec && rec.stop(); return; }
-  if (state === 'speaking'){ synth && synth.cancel(); setState('idle','Tap and talk!'); return; }
+  if (state === 'speaking'){ stopSpeaking(); setState('idle','Tap and talk!'); return; }
   if (state === 'thinking') return;
 
-  synth && synth.cancel();
+  stopSpeaking();
   kidEl.textContent = '';
   setState('listening','I\'m listening…');
   let heard = '';
@@ -323,18 +381,31 @@ function openPanel(errMsg){
 $('gear').onclick = () => openPanel();
 $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('voiceSel').onchange = e => { voiceName = e.target.value; };
-$('testVoice').onclick = () => { voiceName = $('voiceSel').value; speak("It's-a me, Mario! Wahoo! Let's-a go!"); };
+$('testVoice').onclick = async () => {
+  unlockAudio();
+  voiceName = $('voiceSel').value;
+  const note = $('voiceNote'); note.hidden = false; note.className = 'small';
+  note.textContent = voiceName === DIEGO ? 'Getting Mario\'s Diego voice…' : 'Playing the phone voice.';
+  await speak("It's-a me, Mario! Wahoo! Let's-a go!");
+  if (voiceName === DIEGO){
+    if (diegoError){ note.className = 'small err'; note.textContent = diegoError; }
+    else note.textContent = 'Diego voice is working.';
+  }
+};
 $('setup').addEventListener('submit', e => {
   e.preventDefault();
   const k = $('key').value.trim();
   if (!k){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste an API key to let Mario answer.'; return; }
+  unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
   $('panel').hidden = true;
+  prefetchFillers();
   speak("Okey-dokey! It's-a me, Mario! Tap the big button and ask me anything!");
 });
 
 if (!apiKey) openPanel();
+prefetchFillers();
 if (!SR) statusEl.textContent = 'Open in Chrome or Edge to talk';
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
