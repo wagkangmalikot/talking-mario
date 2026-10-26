@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,3 +42,13 @@ jobs:
         with:
           name: TalkToMario-apk
           path: TalkToMario.apk
+
+      - name: Publish APK as a release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Talk to Mario v1.0.${{ github.run_number }}
+          body: "Download TalkToMario.apk below and open it on your Android phone."
+          files: TalkToMario.apk
+          make_latest: true
