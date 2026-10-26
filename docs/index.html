@@ -225,9 +225,12 @@ if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setInterval(() => { if (s
 /* ---------- Diego online voice (same service as edge-tts) ---------- */
 const player = new Audio();
 const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let audioUnlocked = false;
 function unlockAudio(){
-  // Phones only allow sound that starts from a tap; play silence on the tap so Mario's clips can play later.
-  try { player.src = SILENT; const p = player.play(); if (p) p.catch(() => {}); } catch(e){}
+  // Phones only allow sound that starts from a tap; play silence once so Mario's clips can play later.
+  // Done only once: playing sound right as the microphone starts makes Android cancel the listening.
+  if (audioUnlocked) return;
+  try { player.src = SILENT; const p = player.play(); if (p) p.then(() => { audioUnlocked = true; }).catch(() => {}); } catch(e){}
 }
 const clipCache = new Map();
 let diegoError = '';
@@ -275,7 +278,7 @@ function prefetchFillers(){ if (voiceName === DIEGO) THINKING.forEach(t => diego
 /* ---------- Listening ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
-function listen(){
+function listenOnce(){
   return new Promise((resolve, reject) => {
     rec = new SR();
     rec.lang = lang; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
@@ -290,6 +293,15 @@ function listen(){
     rec.onend = () => resolve(finalText || kidEl.textContent);
     rec.start();
   });
+}
+async function listen(){
+  try { return await listenOnce(); }
+  catch (err){
+    // Android sometimes cancels the first try ("aborted"); wait a moment and listen again once.
+    if (err !== 'aborted' && err !== 'audio-capture' && err !== 'network') throw err;
+    await new Promise(r => setTimeout(r, 400));
+    return listenOnce();
+  }
 }
 
 /* ---------- Mario's brain ---------- */
@@ -309,7 +321,9 @@ async function askMario(text){
   });
   if (!res.ok){
     turns.pop();
-    const err = new Error('api'); err.status = res.status; throw err;
+    let detail = '';
+    try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
+    const err = new Error(detail || 'api'); err.status = res.status; throw err;
   }
   const data = await res.json();
   const answer = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
@@ -353,6 +367,7 @@ talkBtn.addEventListener('click', async () => {
       speak("Hmm? I didn't hear anything! Tap the button and talk to me!");
     } else {
       marioSays("Oops, my ears got clogged like a warp pipe! Try again!");
+      statusEl.textContent = 'Tap and talk! (listening error: ' + err + ')';
     }
     return;
   }
@@ -374,6 +389,8 @@ talkBtn.addEventListener('click', async () => {
     if (e.status === 401 || e.status === 403){ marioSays("Mamma mia! My brain key isn't working. A grown-up needs to check the settings."); openPanel('That API key was not accepted. Check it and save again.'); }
     else if (e.status === 429){ marioSays("Whoa, slow down! Let me catch my breath, then ask again!"); speak("Whoa, slow down! Let me catch my breath, then ask again!"); }
     else { marioSays("Oops, a warp pipe got clogged! Can you ask me again?"); speak("Oops, a warp pipe got clogged! Can you ask me again?"); }
+    if (e.status) statusEl.textContent = 'Tap and talk! (Claude error ' + e.status + (e.message && e.message !== 'api' ? ': ' + e.message.slice(0, 120) : '') + ')';
+    else statusEl.textContent = 'Tap and talk! (no internet?)';
   }
 });
 
