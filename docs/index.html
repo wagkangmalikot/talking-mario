@@ -103,11 +103,11 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
 <div class="panel" id="panel" hidden>
   <form class="card" id="setup">
     <h2>Grown-ups only</h2>
-    <p>Mario's brain runs on the Claude API. Paste your Anthropic API key once; it stays saved in this browser only.</p>
-    <label>Claude API key<input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+    <p>Mario's brain and voice run on your free Cloudflare relay. Paste its link below. A Claude API key is optional: it is only used if the free brain can't answer.</p>
+    <label>Claude API key <span class="small" style="font-weight:600">(optional backup)</span><input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
-    <label>Diego voice relay link<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
+    <label>Cloudflare relay link (brain + Diego voice)<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <p class="small" id="voiceNote" hidden></p>
     <label>Language your kid speaks<select id="lang">
       <option value="en-US">English (US)</option>
@@ -305,10 +305,49 @@ async function listen(){
 }
 
 /* ---------- Mario's brain ---------- */
+// Free first: Cloudflare Workers AI through the relay. Claude only as an optional backup.
+const answerCache = (() => { try { return JSON.parse(localStorage.getItem('mario-answers') || '{}'); } catch(e){ return {}; } })();
+const qKey = t => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+function relayBase(){ return relayUrl.replace(/\/+$/, ''); }
+async function askFree(){
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const res = await fetch(relayBase() + '/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: ctl.signal,
+      body: JSON.stringify({ system: RULES, messages: turns }) });
+    if (!res.ok){ let m = ''; try { m = await res.text(); } catch(e){} const err = new Error(m || 'brain error'); err.status = res.status; err.free = true; throw err; }
+    const j = await res.json();
+    return String(j.text || '').trim();
+  } finally { clearTimeout(timer); }
+}
 async function askMario(text){
+  // A question asked before (and not in the middle of a chat) reuses the saved answer: no AI used at all.
+  const k = qKey(text);
+  if (turns.length === 0 && answerCache[k]){
+    turns.push({ role:'user', content:text }, { role:'assistant', content:answerCache[k] });
+    return answerCache[k];
+  }
   turns.push({ role:'user', content:text });
   while (turns.length > 14) turns.shift();
   while (turns[0] && turns[0].role !== 'user') turns.shift();
+  let answer = '';
+  if (relayUrl){
+    try { answer = await askFree(); }
+    catch (e){ if (!apiKey){ turns.pop(); throw e; } }
+  }
+  if (!answer){
+    if (!apiKey){ turns.pop(); const err = new Error('Add your Cloudflare relay link in settings.'); err.status = 0; err.setup = true; throw err; }
+    answer = await askClaude();
+  }
+  answer = answer.replace(/\*[^*]{1,40}\*/g, '').replace(/\s+/g, ' ').trim();
+  turns.push({ role:'assistant', content:answer });
+  if (turns.length === 2){
+    answerCache[k] = answer;
+    const keys = Object.keys(answerCache); if (keys.length > 300) delete answerCache[keys[0]];
+    try { localStorage.setItem('mario-answers', JSON.stringify(answerCache)); } catch(e){}
+  }
+  return answer;
+}
+async function askClaude(){
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{
@@ -326,9 +365,7 @@ async function askMario(text){
     const err = new Error(detail || 'api'); err.status = res.status; throw err;
   }
   const data = await res.json();
-  const answer = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
-  turns.push({ role:'assistant', content:answer });
-  return answer;
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
 }
 
 /* ---------- Flow ---------- */
@@ -348,7 +385,7 @@ function marioSays(text, waiting){
 talkBtn.addEventListener('click', async () => {
   unlockAudio();
   if (!SR){ marioSays("Mamma mia! This browser can't hear you. Please open me in Google Chrome or Microsoft Edge."); return; }
-  if (!apiKey){ openPanel(); return; }
+  if (!apiKey && !relayUrl){ openPanel(); return; }
   if (state === 'listening'){ rec && rec.stop(); return; }
   if (state === 'speaking'){ stopSpeaking(); setState('idle','Tap and talk!'); return; }
   if (state === 'thinking') return;
@@ -386,10 +423,14 @@ talkBtn.addEventListener('click', async () => {
     if (state === 'speaking') setState('idle','Tap and talk!');
   } catch (e){
     setState('idle','Tap and talk!');
-    if (e.status === 401 || e.status === 403){ marioSays("Mamma mia! My brain key isn't working. A grown-up needs to check the settings."); openPanel('That API key was not accepted. Check it and save again.'); }
+    if (e.setup){ marioSays("Mamma mia! A grown-up needs to finish my settings."); openPanel('Paste your Cloudflare relay link to give Mario his free brain.'); }
+    else if (e.free && e.status === 501){ marioSays("Mamma mia! My brain isn't switched on yet. A grown-up needs to check the settings."); openPanel('On your Cloudflare worker, add a Workers AI binding named AI, then try again.'); }
+    else if (e.free && e.status === 429){ marioSays("Mamma mia, I'm all tired out for today! Let's-a talk again tomorrow!"); speak("Mamma mia, I'm all tired out for today! Let's-a talk again tomorrow!"); }
+    else if (!e.free && (e.status === 401 || e.status === 403)){ marioSays("Mamma mia! My brain key isn't working. A grown-up needs to check the settings."); openPanel('That API key was not accepted. Check it and save again.'); }
     else if (e.status === 429){ marioSays("Whoa, slow down! Let me catch my breath, then ask again!"); speak("Whoa, slow down! Let me catch my breath, then ask again!"); }
     else { marioSays("Oops, a warp pipe got clogged! Can you ask me again?"); speak("Oops, a warp pipe got clogged! Can you ask me again?"); }
-    if (e.status) statusEl.textContent = 'Tap and talk! (Claude error ' + e.status + (e.message && e.message !== 'api' ? ': ' + e.message.slice(0, 120) : '') + ')';
+    if (e.free) statusEl.textContent = 'Tap and talk! (brain error ' + e.status + ': ' + String(e.message).slice(0, 120) + ')';
+    else if (e.status) statusEl.textContent = 'Tap and talk! (Claude error ' + e.status + (e.message && e.message !== 'api' ? ': ' + e.message.slice(0, 120) : '') + ')';
     else statusEl.textContent = 'Tap and talk! (no internet?)';
   }
 });
@@ -418,7 +459,7 @@ $('testVoice').onclick = async () => {
 $('setup').addEventListener('submit', e => {
   e.preventDefault();
   const k = $('key').value.trim();
-  if (!k){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste an API key to let Mario answer.'; return; }
+  if (!k && !$('relay').value.trim()){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste your Cloudflare relay link (or a Claude key) so Mario can answer.'; return; }
   unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
   relayUrl = $('relay').value.trim(); store.set('mario-relay', relayUrl);
@@ -428,7 +469,7 @@ $('setup').addEventListener('submit', e => {
   speak("Okey-dokey! It's-a me, Mario! Tap the big button and ask me anything!");
 });
 
-if (!apiKey) openPanel();
+if (!apiKey && !relayUrl) openPanel();
 prefetchFillers();
 if (!SR) statusEl.textContent = 'Open in Chrome or Edge to talk';
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -1,7 +1,9 @@
 // Mario voice relay — a Cloudflare Worker.
 // The app sends text here; this worker asks Microsoft's Edge read-aloud service
 // (the same one the Python edge-tts library uses) for the Diego voice and returns an MP3.
+// It is also Mario's free brain: /chat answers with Cloudflare Workers AI (free daily allowance).
 // Paste this whole file into a Cloudflare Worker and press Deploy.
+// For the brain, add a Workers AI binding named AI (Settings > Bindings > Add > Workers AI).
 
 const ALLOWED_ORIGINS = [
   'https://wagkangmalikot.github.io',
@@ -237,8 +239,40 @@ async function synthesize(text, voice, rate, pitch) {
   return out;
 }
 
+// Free brain models, tried in order until one answers.
+const CHAT_MODELS = [
+  '@cf/meta/llama-3.1-8b-instruct-fast',
+  '@cf/meta/llama-3.1-8b-instruct',
+  '@cf/meta/llama-3.2-3b-instruct'
+];
+
+async function chat(env, body, headers) {
+  if (!env || !env.AI) {
+    return new Response('The free brain needs a Workers AI binding named AI on this worker.', { status: 501, headers: { ...headers, 'content-type': 'text/plain' } });
+  }
+  const system = String(body.system || '').slice(0, 6000);
+  const turns = (Array.isArray(body.messages) ? body.messages : []).slice(-14)
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .map(m => ({ role: m.role, content: m.content.slice(0, 1000) }));
+  if (!turns.length || turns[turns.length - 1].role !== 'user') {
+    return new Response('Send messages ending with the child\'s question.', { status: 400, headers });
+  }
+  const messages = system ? [{ role: 'system', content: system }, ...turns] : turns;
+  let lastError = '';
+  for (const model of CHAT_MODELS) {
+    try {
+      const out = await env.AI.run(model, { messages, max_tokens: 220, temperature: 0.8 });
+      const text = String((out && (out.response ?? out.result?.response ?? out.choices?.[0]?.message?.content)) || '').trim();
+      if (text) return new Response(JSON.stringify({ text, model }), { headers: { ...headers, 'content-type': 'application/json' } });
+      lastError = model + ' gave no text';
+    } catch (e) { lastError = model + ': ' + (e.message || e); }
+  }
+  const limit = /neuron|limit|quota|429/i.test(lastError);
+  return new Response('Brain error: ' + lastError, { status: limit ? 429 : 502, headers: { ...headers, 'content-type': 'text/plain' } });
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
     const headers = cors(origin);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
@@ -249,6 +283,7 @@ export default {
     }
     let body;
     try { body = await request.json(); } catch (e) { return new Response('Send JSON like {"text":"Wahoo!"}', { status: 400, headers }); }
+    if (new URL(request.url).pathname.replace(/\/+$/, '') === '/chat') return chat(env, body, headers);
     const text = String(body.text || '').trim().slice(0, 1500);
     if (!text) return new Response('No text', { status: 400, headers });
     const voice = /^[a-z]{2,3}-[A-Z]{2}-[A-Za-z]+Neural$/.test(body.voice || '') ? body.voice : DEFAULTS.voice;
