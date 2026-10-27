@@ -108,6 +108,11 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <label>Claude API key <span class="small" style="font-weight:600">(optional backup)</span><input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
     <label>Cloudflare relay link (brain + voice)<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
+    <div id="elBox" hidden style="display:flex;flex-direction:column;gap:14px">
+      <label>ElevenLabs API key<input id="elKey" type="password" placeholder="sk_…" autocomplete="off" spellcheck="false"></label>
+      <label>ElevenLabs voice ID<input id="elVoice" type="text" placeholder="Paste the voice ID" autocomplete="off" spellcheck="false"></label>
+      <p class="small">In ElevenLabs: add the voice you want to <b>My Voices</b>, then tap ⋯ → <b>Copy voice ID</b>. The pitch and cartoon sliders don't change ElevenLabs voices.</p>
+    </div>
     <label for="pitchLvl">Voice pitch: <span id="pitchVal">-2</span> <span class="small" style="font-weight:600">(−5 = low, +5 = high)</span>
       <input id="pitchLvl" type="range" min="-5" max="5" step="1" value="-2"></label>
     <label for="cartoon">Cartoon level: <span id="cartoonVal">5</span> <span class="small" style="font-weight:600">(0 = natural, 10 = very cartoony)</span>
@@ -171,6 +176,10 @@ if (voiceName === '__diego__') voiceName = DEFAULT_VOICE;
 let cartoon = Number(store.get('mario-cartoon') ?? 5); if (!(cartoon >= 0 && cartoon <= 10)) cartoon = 5;
 let pitchLvl = Number(store.get('mario-pitch') ?? -2); if (!(pitchLvl >= -5 && pitchLvl <= 5)) pitchLvl = -2;
 const isOnline = v => v.startsWith('online:');
+const ELEVEN = 'eleven';
+let elKey = store.get('mario-el-key') || '';
+let elVoice = store.get('mario-el-voice') || '';
+const cleanVoiceId = v => { const m = String(v).match(/[A-Za-z0-9]{20}/); return m ? m[0] : String(v).trim(); };
 let relayUrl = store.get('mario-relay') || '';
 const turns = [];
 let state = 'idle'; // idle | listening | thinking | speaking
@@ -193,6 +202,7 @@ function loadVoices(){
   voices = synth ? synth.getVoices() : [];
   const sel = $('voiceSel'); sel.innerHTML = '';
   const add = (value, label) => { const o = document.createElement('option'); o.value = value; o.textContent = label; sel.append(o); };
+  add(ELEVEN, 'ElevenLabs voice (your choice)');
   Object.entries(ONLINE).forEach(([v, label]) => add(v, label));
   const sorted = [...voices].sort((a,b) => rankVoice(b) - rankVoice(a));
   if (!sorted.length) add('', 'Phone default voice');
@@ -276,12 +286,12 @@ async function onlineClip(text, voiceId){
   return url;
 }
 let endClip = null;
-function playUrl(url){
+function playUrl(url, natural){
   return new Promise(resolve => {
     const done = () => { if (endClip === done) endClip = null; resolve(); };
     endClip = done;
     player.src = url;
-    const speed = url === SILENT ? 1 : cartoonSettings().speed;
+    const speed = (url === SILENT || natural) ? 1 : cartoonSettings().speed;
     player.preservesPitch = player.mozPreservesPitch = player.webkitPreservesPitch = false;
     player.defaultPlaybackRate = speed; player.playbackRate = speed;
     player.onended = player.onerror = done;
@@ -289,23 +299,65 @@ function playUrl(url){
     if (p) p.catch(done);
   });
 }
+/* ---------- ElevenLabs voice ---------- */
+async function elevenClip(text){
+  if (!elKey || !elVoice) throw new Error('Add your ElevenLabs key and voice ID.');
+  const ck = 'el|' + elVoice + '|' + text;
+  if (clipCache.has(ck)) return clipCache.get(ck);
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 15000);
+  let res;
+  try {
+    res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elVoice)}?output_format=mp3_44100_128`, {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'xi-api-key': elKey, 'content-type': 'application/json', 'accept': 'audio/mpeg' },
+      body: JSON.stringify({ text, model_id: 'eleven_flash_v2_5' })
+    });
+  } finally { clearTimeout(timer); }
+  if (!res.ok){
+    let detail = '';
+    try { const j = await res.json(); detail = (j.detail && (j.detail.message || j.detail.status || (typeof j.detail === 'string' ? j.detail : ''))) || ''; } catch(e){}
+    const msg = res.status === 401 ? 'The ElevenLabs key was not accepted' + (detail ? ': ' + detail : '')
+      : (res.status === 404 || res.status === 400) ? 'ElevenLabs could not use that voice ID' + (detail ? ': ' + detail : '')
+      : res.status === 429 ? 'ElevenLabs is out of credits or busy' : (detail || 'ElevenLabs error ' + res.status);
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  if (!blob.size) throw new Error('ElevenLabs sent no audio');
+  const url = URL.createObjectURL(blob);
+  if (text.length < 80) clipCache.set(ck, url);
+  return url;
+}
+
 async function speak(text){
   const clean = text.replace(/[*_#~`]/g, '');
-  if (isOnline(voiceName)){
-    const tryVoices = [voiceName.slice(7)];
+  let elNote = '';
+  if (voiceName === ELEVEN){
+    try { const url = await elevenClip(clean); voiceError = ''; await playUrl(url, true); return; }
+    catch (e){ elNote = String(e.message || e).slice(0, 200); }
+  }
+  if (isOnline(voiceName) || voiceName === ELEVEN){
+    const tryVoices = voiceName === ELEVEN ? ['it-IT-GiuseppeMultilingualNeural'] : [voiceName.slice(7)];
     if (tryVoices[0] !== 'it-IT-DiegoNeural') tryVoices.push('it-IT-DiegoNeural');   // Diego as second choice
     let lastErr = null;
     for (const id of tryVoices){
-      try { const url = await onlineClip(clean, id); voiceError = id === tryVoices[0] ? '' : 'Giuseppe wasn\'t available, so Mario used Diego.'; await playUrl(url); return; }
+      try {
+        const url = await onlineClip(clean, id);
+        voiceError = elNote ? elNote + '. Mario used the free voice instead.' : (id === tryVoices[0] ? '' : 'Giuseppe wasn\'t available, so Mario used Diego.');
+        await playUrl(url); return;
+      }
       catch (e){ lastErr = e; if (e.message === 'no relay') break; }
     }
     voiceError = lastErr && lastErr.message === 'no relay' ? "Add your Cloudflare relay link to use Mario's voice. Mario used the phone's voice."
       : "Mario's voice couldn't be reached (" + String((lastErr && lastErr.message) || lastErr).slice(0, 300) + "). Mario used the phone's voice.";
+    if (elNote) voiceError = elNote + '. ' + voiceError;
   }
   await phoneSpeak(text);
 }
 function stopSpeaking(){ try { player.pause(); } catch(e){} if (endClip) endClip(); if (synth) synth.cancel(); }
-function prefetchFillers(){ if (isOnline(voiceName)) THINKING.forEach(t => onlineClip(t, voiceName.slice(7)).catch(() => {})); }
+function prefetchFillers(){
+  if (voiceName === ELEVEN) THINKING.forEach(t => elevenClip(t).catch(() => {}));
+  else if (isOnline(voiceName)) THINKING.forEach(t => onlineClip(t, voiceName.slice(7)).catch(() => {}));
+}
 
 /* ---------- Listening ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -472,12 +524,13 @@ function openPanel(errMsg){
   $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName; $('relay').value = relayUrl;
   $('cartoon').value = cartoon; $('cartoonVal').textContent = cartoon;
   $('pitchLvl').value = pitchLvl; $('pitchVal').textContent = (pitchLvl > 0 ? '+' : '') + pitchLvl;
+  $('elKey').value = elKey; $('elVoice').value = elVoice; $('elBox').hidden = voiceName !== ELEVEN;
   $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
   $('panel').hidden = false;
 }
 $('gear').onclick = () => openPanel();
 $('closePanel').onclick = () => { $('panel').hidden = true; };
-$('voiceSel').onchange = e => { voiceName = e.target.value; };
+$('voiceSel').onchange = e => { voiceName = e.target.value; $('elBox').hidden = voiceName !== ELEVEN; };
 $('pitchLvl').oninput = e => { pitchLvl = Number(e.target.value); $('pitchVal').textContent = (pitchLvl > 0 ? '+' : '') + pitchLvl; };
 $('cartoon').oninput = e => { cartoon = Number(e.target.value); $('cartoonVal').textContent = cartoon; };
 $('testVoice').onclick = async () => {
@@ -486,11 +539,12 @@ $('testVoice').onclick = async () => {
   relayUrl = $('relay').value.trim();
   const note = $('voiceNote'); note.hidden = false; note.className = 'small';
   cartoon = Number($('cartoon').value); pitchLvl = Number($('pitchLvl').value);
-  note.textContent = isOnline(voiceName) ? 'Getting Mario\'s voice…' : 'Playing the phone voice.';
+  elKey = $('elKey').value.trim(); elVoice = cleanVoiceId($('elVoice').value); $('elVoice').value = elVoice;
+  note.textContent = voiceName === ELEVEN ? 'Getting the ElevenLabs voice…' : isOnline(voiceName) ? 'Getting Mario\'s voice…' : 'Playing the phone voice.';
   await speak("It's-a me, Mario! Wahoo! Let's-a go! I'm-a gonna jump so high-a!");
-  if (isOnline(voiceName)){
+  if (isOnline(voiceName) || voiceName === ELEVEN){
     if (voiceError && !voiceError.startsWith('Giuseppe')){ note.className = 'small err'; note.textContent = voiceError; }
-    else note.textContent = voiceError || 'Mario\'s voice is working.';
+    else note.textContent = voiceError || (voiceName === ELEVEN ? 'ElevenLabs voice is working.' : 'Mario\'s voice is working.');
   }
 };
 $('setup').addEventListener('submit', e => {
@@ -502,6 +556,8 @@ $('setup').addEventListener('submit', e => {
   cartoon = Number($('cartoon').value); store.set('mario-cartoon', String(cartoon));
   pitchLvl = Number($('pitchLvl').value); store.set('mario-pitch', String(pitchLvl));
   relayUrl = $('relay').value.trim(); store.set('mario-relay', relayUrl);
+  elKey = $('elKey').value.trim(); elVoice = cleanVoiceId($('elVoice').value);
+  store.set('mario-el-key', elKey); store.set('mario-el-voice', elVoice);
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
   $('panel').hidden = true;
   prefetchFillers();
