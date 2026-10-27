@@ -70,6 +70,7 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
 .card h2{font-family:var(--display);font-weight:400;font-size:26px;margin:0;color:var(--red)}
 .card p{margin:0;color:var(--ink-soft);line-height:1.5;font-size:15px}
 .card label{font-weight:800;font-size:14px;display:flex;flex-direction:column;gap:6px}
+.card input[type=range]{padding:0;accent-color:var(--red);height:32px}
 .card input,.card select{font:600 16px var(--body);padding:10px 12px;border:2px solid #cfd8e3;border-radius:12px;width:100%}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 .btn{font:800 16px var(--body);border:0;border-radius:12px;padding:12px 18px;cursor:pointer;background:var(--red);color:#fff}
@@ -105,16 +106,18 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <h2>Grown-ups only</h2>
     <p>Mario's brain and voice run on your free Cloudflare relay. Paste its link below. A Claude API key is optional: it is only used if the free brain can't answer.</p>
     <label>Claude API key <span class="small" style="font-weight:600">(optional backup)</span><input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+    <label>Cloudflare relay link (brain + voice)<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
+    <label for="cartoon">Cartoon level: <span id="cartoonVal">5</span> <span class="small" style="font-weight:600">(0 = natural, 10 = very cartoony)</span>
+      <input id="cartoon" type="range" min="0" max="10" step="1" value="5"></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
-    <label>Cloudflare relay link (brain + Diego voice)<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <p class="small" id="voiceNote" hidden></p>
     <label>Language your kid speaks<select id="lang">
       <option value="en-US">English (US)</option>
       <option value="en-PH">English (Philippines)</option>
       <option value="fil-PH">Filipino / Tagalog</option>
     </select></label>
-    <p class="small">"Mario (Diego, online)" is Microsoft's Italian Diego voice, sped up and pitched up. It plays through your voice relay link. Without it, or if it can't be reached, Mario uses the phone's own voice.</p>
+    <p class="small">Giuseppe speaks English with an Italian accent; Diego is more Italian. Both play through your relay. If the relay can't be reached, Mario uses the phone's own voice.</p>
     <p class="err" id="setupErr" hidden></p>
     <div class="row"><button class="btn" type="submit">Save &amp; play</button><button class="btn ghost" type="button" id="closePanel">Close</button></div>
   </form>
@@ -126,7 +129,11 @@ const RULES = `You are Mario, the cheerful plumber hero who lives in the Mushroo
 
 How to talk:
 - Always stay in character as Mario: warm, brave, silly and kind.
-- Use Mario's playful Italian-flavored speech: "Wahoo!", "Mamma mia!", "Let's-a go!", "Okey-dokey!", "Here we go!", and add "-a" to some words ("it's-a", "let-a me tell you"). Keep it fun, not every sentence.
+- WRITE THE WAY MARIO SOUNDS, with his bouncy Italian accent spelled out:
+  - Catchphrases: "Wahoo!", "Yahoo!", "Mamma mia!", "Let's-a go!", "Okey-dokey!", "Here we gooo!", "It's-a me, Mario!"
+  - Add "-a" after some words, in every reply: "it's-a", "let-a me tell you", "a big-a jump", "so much-a fun", "my brother-a Luigi".
+  - Short, excited bursts with lots of "!" and stretched sounds: "Woo-hoo!", "Ooh!", "Yaaay!".
+  - Example of the style: "Wahoo! Yoshi is-a my best-a dino friend! He eats-a fruit with his big-a tongue, and he lets me ride on his back! Do you like-a dinosaurs?"
 - Keep answers SHORT: 2 to 4 simple sentences. Easy words.
 - Plain spoken text only: no lists, markdown, emojis, asterisks or stage directions.
 - Often end with a fun little question to keep the child talking.
@@ -154,8 +161,13 @@ const store = {
 };
 let apiKey = store.get('mario-key') || '';
 let lang = store.get('mario-lang') || 'en-US';
-const DIEGO = '__diego__';
-let voiceName = store.get('mario-voice') || DIEGO;
+const ONLINE = { 'online:it-IT-GiuseppeMultilingualNeural': 'Mario – Giuseppe (English with Italian accent) – best',
+                 'online:it-IT-DiegoNeural': 'Mario – Diego (more Italian)' };
+const DEFAULT_VOICE = 'online:it-IT-GiuseppeMultilingualNeural';
+let voiceName = store.get('mario-voice') || DEFAULT_VOICE;
+if (voiceName === '__diego__') voiceName = DEFAULT_VOICE;
+let cartoon = Number(store.get('mario-cartoon') ?? 5); if (!(cartoon >= 0 && cartoon <= 10)) cartoon = 5;
+const isOnline = v => v.startsWith('online:');
 let relayUrl = store.get('mario-relay') || '';
 const turns = [];
 let state = 'idle'; // idle | listening | thinking | speaking
@@ -178,11 +190,11 @@ function loadVoices(){
   voices = synth ? synth.getVoices() : [];
   const sel = $('voiceSel'); sel.innerHTML = '';
   const add = (value, label) => { const o = document.createElement('option'); o.value = value; o.textContent = label; sel.append(o); };
-  add(DIEGO, 'Mario (Diego, online) – best');
+  Object.entries(ONLINE).forEach(([v, label]) => add(v, label));
   const sorted = [...voices].sort((a,b) => rankVoice(b) - rankVoice(a));
   if (!sorted.length) add('', 'Phone default voice');
   sorted.forEach(v => add(v.name, `${v.name} (${v.lang})`));
-  if (![...sel.options].some(o => o.value === voiceName)) voiceName = DIEGO;
+  if (![...sel.options].some(o => o.value === voiceName)) voiceName = DEFAULT_VOICE;
   sel.value = voiceName;
 }
 loadVoices();
@@ -206,7 +218,7 @@ function phoneSpeak(text){
     if (!synth) return resolve();
     synth.cancel();
     const parts = marioize(text).match(/[^.!?]+[.!?]*/g) || [text];
-    const v = voiceName === DIEGO ? (voices.slice().sort((a,b) => rankVoice(b) - rankVoice(a))[0] || null) : currentVoice();
+    const v = isOnline(voiceName) ? (voices.slice().sort((a,b) => rankVoice(b) - rankVoice(a))[0] || null) : currentVoice();
     let left = parts.length;
     parts.forEach(p => {
       const u = new SpeechSynthesisUtterance(p.trim());
@@ -222,7 +234,15 @@ function phoneSpeak(text){
 // Chrome pauses long speech after ~15s; nudge it.
 if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setInterval(() => { if (synth && synth.speaking && !synth.paused){ synth.pause(); synth.resume(); } }, 10000);
 
-/* ---------- Diego online voice (same service as edge-tts) ---------- */
+/* ---------- Online Mario voice (same service as edge-tts) ---------- */
+// Cartoon effect: play the clip faster WITHOUT keeping its pitch (brighter, squeakier, more cartoon),
+// and ask the voice service for a little less speed and pitch so the total stays easy to follow.
+function cartoonSettings(){
+  const speed = 1 + cartoon * 0.03;                        // 1.00 .. 1.30 playback speed
+  const ratePct = Math.round((1.2 / speed - 1) * 100);     // keep overall speed near +20%
+  const pitchHz = Math.round(50 - cartoon * 4.5);          // playback already raises the pitch
+  return { speed, rate: (ratePct >= 0 ? '+' : '') + ratePct + '%', pitch: (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz' };
+}
 const player = new Audio();
 const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 let audioUnlocked = false;
@@ -233,21 +253,23 @@ function unlockAudio(){
   try { player.src = SILENT; const p = player.play(); if (p) p.then(() => { audioUnlocked = true; }).catch(() => {}); } catch(e){}
 }
 const clipCache = new Map();
-let diegoError = '';
-async function diegoClip(text){
-  if (clipCache.has(text)) return clipCache.get(text);
+let voiceError = '';
+async function onlineClip(text, voiceId){
+  const cs = cartoonSettings();
+  const ck = [voiceId, cs.rate, cs.pitch, text].join('|');
+  if (clipCache.has(ck)) return clipCache.get(ck);
   if (!relayUrl) throw new Error('no relay');
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 15000);
   let res;
   try {
     res = await fetch(relayUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: ctl.signal,
-      body: JSON.stringify({ text, voice: 'it-IT-DiegoNeural', rate: '+20%', pitch: '+50Hz' }) });
+      body: JSON.stringify({ text, voice: voiceId, rate: cs.rate, pitch: cs.pitch }) });
   } finally { clearTimeout(timer); }
   if (!res.ok){ let m = ''; try { m = await res.text(); } catch(e){} throw new Error(m || ('relay error ' + res.status)); }
   const audio = await res.blob();
   if (!audio.size) throw new Error('no audio');
   const url = URL.createObjectURL(audio);
-  if (text.length < 80) clipCache.set(text, url);
+  if (text.length < 80) clipCache.set(ck, url);
   return url;
 }
 let endClip = null;
@@ -256,6 +278,9 @@ function playUrl(url){
     const done = () => { if (endClip === done) endClip = null; resolve(); };
     endClip = done;
     player.src = url;
+    const speed = url === SILENT ? 1 : cartoonSettings().speed;
+    player.preservesPitch = player.mozPreservesPitch = player.webkitPreservesPitch = false;
+    player.defaultPlaybackRate = speed; player.playbackRate = speed;
     player.onended = player.onerror = done;
     const p = player.play();
     if (p) p.catch(done);
@@ -263,17 +288,21 @@ function playUrl(url){
 }
 async function speak(text){
   const clean = text.replace(/[*_#~`]/g, '');
-  if (voiceName === DIEGO){
-    try { const url = await diegoClip(clean); diegoError = ''; await playUrl(url); return; }
-    catch (e){
-      diegoError = e.message === 'no relay' ? "Add your Diego voice relay link to use Diego. Mario used the phone's voice."
-        : "The Diego voice couldn't be reached (" + String(e.message || e).slice(0, 300) + "). Mario used the phone's voice.";
+  if (isOnline(voiceName)){
+    const tryVoices = [voiceName.slice(7)];
+    if (tryVoices[0] !== 'it-IT-DiegoNeural') tryVoices.push('it-IT-DiegoNeural');   // Diego as second choice
+    let lastErr = null;
+    for (const id of tryVoices){
+      try { const url = await onlineClip(clean, id); voiceError = id === tryVoices[0] ? '' : 'Giuseppe wasn\'t available, so Mario used Diego.'; await playUrl(url); return; }
+      catch (e){ lastErr = e; if (e.message === 'no relay') break; }
     }
+    voiceError = lastErr && lastErr.message === 'no relay' ? "Add your Cloudflare relay link to use Mario's voice. Mario used the phone's voice."
+      : "Mario's voice couldn't be reached (" + String((lastErr && lastErr.message) || lastErr).slice(0, 300) + "). Mario used the phone's voice.";
   }
   await phoneSpeak(text);
 }
 function stopSpeaking(){ try { player.pause(); } catch(e){} if (endClip) endClip(); if (synth) synth.cancel(); }
-function prefetchFillers(){ if (voiceName === DIEGO) THINKING.forEach(t => diegoClip(t).catch(() => {})); }
+function prefetchFillers(){ if (isOnline(voiceName)) THINKING.forEach(t => onlineClip(t, voiceName.slice(7)).catch(() => {})); }
 
 /* ---------- Listening ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -306,7 +335,7 @@ async function listen(){
 
 /* ---------- Mario's brain ---------- */
 // Free first: Cloudflare Workers AI through the relay. Claude only as an optional backup.
-const answerCache = (() => { try { return JSON.parse(localStorage.getItem('mario-answers') || '{}'); } catch(e){ return {}; } })();
+const answerCache = (() => { try { return JSON.parse(localStorage.getItem('mario-answers-v2') || '{}'); } catch(e){ return {}; } })();
 const qKey = t => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 function relayBase(){ return relayUrl.replace(/\/+$/, ''); }
 async function askFree(){
@@ -343,7 +372,7 @@ async function askMario(text){
   if (turns.length === 2){
     answerCache[k] = answer;
     const keys = Object.keys(answerCache); if (keys.length > 300) delete answerCache[keys[0]];
-    try { localStorage.setItem('mario-answers', JSON.stringify(answerCache)); } catch(e){}
+    try { localStorage.setItem('mario-answers-v2', JSON.stringify(answerCache)); } catch(e){}
   }
   return answer;
 }
@@ -438,22 +467,25 @@ talkBtn.addEventListener('click', async () => {
 /* ---------- Grown-ups panel ---------- */
 function openPanel(errMsg){
   $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName; $('relay').value = relayUrl;
+  $('cartoon').value = cartoon; $('cartoonVal').textContent = cartoon;
   $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
   $('panel').hidden = false;
 }
 $('gear').onclick = () => openPanel();
 $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('voiceSel').onchange = e => { voiceName = e.target.value; };
+$('cartoon').oninput = e => { cartoon = Number(e.target.value); $('cartoonVal').textContent = cartoon; };
 $('testVoice').onclick = async () => {
   unlockAudio();
   voiceName = $('voiceSel').value;
   relayUrl = $('relay').value.trim();
   const note = $('voiceNote'); note.hidden = false; note.className = 'small';
-  note.textContent = voiceName === DIEGO ? 'Getting Mario\'s Diego voice…' : 'Playing the phone voice.';
-  await speak("It's-a me, Mario! Wahoo! Let's-a go!");
-  if (voiceName === DIEGO){
-    if (diegoError){ note.className = 'small err'; note.textContent = diegoError; }
-    else note.textContent = 'Diego voice is working.';
+  cartoon = Number($('cartoon').value);
+  note.textContent = isOnline(voiceName) ? 'Getting Mario\'s voice…' : 'Playing the phone voice.';
+  await speak("It's-a me, Mario! Wahoo! Let's-a go! I'm-a gonna jump so high-a!");
+  if (isOnline(voiceName)){
+    if (voiceError && !voiceError.startsWith('Giuseppe')){ note.className = 'small err'; note.textContent = voiceError; }
+    else note.textContent = voiceError || 'Mario\'s voice is working.';
   }
 };
 $('setup').addEventListener('submit', e => {
@@ -462,6 +494,7 @@ $('setup').addEventListener('submit', e => {
   if (!k && !$('relay').value.trim()){ $('setupErr').hidden = false; $('setupErr').textContent = 'Paste your Cloudflare relay link (or a Claude key) so Mario can answer.'; return; }
   unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
+  cartoon = Number($('cartoon').value); store.set('mario-cartoon', String(cartoon));
   relayUrl = $('relay').value.trim(); store.set('mario-relay', relayUrl);
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
   $('panel').hidden = true;
