@@ -108,6 +108,8 @@ h1{font-family:var(--display);font-weight:400;font-size:clamp(26px,7vw,36px);mar
     <label>Claude API key <span class="small" style="font-weight:600">(optional backup)</span><input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
     <label>Cloudflare relay link (brain + voice)<input id="relay" type="url" placeholder="https://mario-voice.yourname.workers.dev" autocomplete="off" spellcheck="false"></label>
     <label>Mario's voice<select id="voiceSel"></select></label>
+    <label for="pitchLvl">Voice pitch: <span id="pitchVal">-2</span> <span class="small" style="font-weight:600">(−5 = low, +5 = high)</span>
+      <input id="pitchLvl" type="range" min="-5" max="5" step="1" value="-2"></label>
     <label for="cartoon">Cartoon level: <span id="cartoonVal">5</span> <span class="small" style="font-weight:600">(0 = natural, 10 = very cartoony)</span>
       <input id="cartoon" type="range" min="0" max="10" step="1" value="5"></label>
     <div class="row"><button class="btn ghost" type="button" id="testVoice">▶ Test voice</button></div>
@@ -167,6 +169,7 @@ const DEFAULT_VOICE = 'online:it-IT-GiuseppeMultilingualNeural';
 let voiceName = store.get('mario-voice') || DEFAULT_VOICE;
 if (voiceName === '__diego__') voiceName = DEFAULT_VOICE;
 let cartoon = Number(store.get('mario-cartoon') ?? 5); if (!(cartoon >= 0 && cartoon <= 10)) cartoon = 5;
+let pitchLvl = Number(store.get('mario-pitch') ?? -2); if (!(pitchLvl >= -5 && pitchLvl <= 5)) pitchLvl = -2;
 const isOnline = v => v.startsWith('online:');
 let relayUrl = store.get('mario-relay') || '';
 const turns = [];
@@ -223,7 +226,7 @@ function phoneSpeak(text){
     parts.forEach(p => {
       const u = new SpeechSynthesisUtterance(p.trim());
       if (v){ u.voice = v; u.lang = v.lang; }
-      u.pitch = 1.6;  // high and bright
+      u.pitch = Math.min(2, Math.max(0.5, 1.6 + pitchLvl * 0.1));  // high and bright
       u.rate = 1.2;   // +20%, as in the edge-tts settings
       u.volume = 1;
       u.onend = u.onerror = () => { if (--left === 0) resolve(); };
@@ -240,7 +243,7 @@ if (!/Android|iPhone|iPad/i.test(navigator.userAgent)) setInterval(() => { if (s
 function cartoonSettings(){
   const speed = 1 + cartoon * 0.03;                        // 1.00 .. 1.30 playback speed
   const ratePct = Math.round((1.2 / speed - 1) * 100);     // keep overall speed near +20%
-  const pitchHz = Math.round(50 - cartoon * 4.5);          // playback already raises the pitch
+  const pitchHz = Math.round(50 - cartoon * 4.5 + pitchLvl * 12);   // playback already raises the pitch; slider moves it 12Hz a step
   return { speed, rate: (ratePct >= 0 ? '+' : '') + ratePct + '%', pitch: (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz' };
 }
 const player = new Audio();
@@ -468,19 +471,21 @@ talkBtn.addEventListener('click', async () => {
 function openPanel(errMsg){
   $('key').value = apiKey; $('lang').value = lang; $('voiceSel').value = voiceName; $('relay').value = relayUrl;
   $('cartoon').value = cartoon; $('cartoonVal').textContent = cartoon;
+  $('pitchLvl').value = pitchLvl; $('pitchVal').textContent = (pitchLvl > 0 ? '+' : '') + pitchLvl;
   $('setupErr').hidden = !errMsg; $('setupErr').textContent = errMsg || '';
   $('panel').hidden = false;
 }
 $('gear').onclick = () => openPanel();
 $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('voiceSel').onchange = e => { voiceName = e.target.value; };
+$('pitchLvl').oninput = e => { pitchLvl = Number(e.target.value); $('pitchVal').textContent = (pitchLvl > 0 ? '+' : '') + pitchLvl; };
 $('cartoon').oninput = e => { cartoon = Number(e.target.value); $('cartoonVal').textContent = cartoon; };
 $('testVoice').onclick = async () => {
   unlockAudio();
   voiceName = $('voiceSel').value;
   relayUrl = $('relay').value.trim();
   const note = $('voiceNote'); note.hidden = false; note.className = 'small';
-  cartoon = Number($('cartoon').value);
+  cartoon = Number($('cartoon').value); pitchLvl = Number($('pitchLvl').value);
   note.textContent = isOnline(voiceName) ? 'Getting Mario\'s voice…' : 'Playing the phone voice.';
   await speak("It's-a me, Mario! Wahoo! Let's-a go! I'm-a gonna jump so high-a!");
   if (isOnline(voiceName)){
@@ -495,6 +500,7 @@ $('setup').addEventListener('submit', e => {
   unlockAudio();
   apiKey = k; lang = $('lang').value; voiceName = $('voiceSel').value;
   cartoon = Number($('cartoon').value); store.set('mario-cartoon', String(cartoon));
+  pitchLvl = Number($('pitchLvl').value); store.set('mario-pitch', String(pitchLvl));
   relayUrl = $('relay').value.trim(); store.set('mario-relay', relayUrl);
   store.set('mario-key', apiKey); store.set('mario-lang', lang); store.set('mario-voice', voiceName);
   $('panel').hidden = true;
